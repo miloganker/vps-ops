@@ -5,11 +5,11 @@
 ## 目录
 
 - `mediahub/`：影视整理服务源码（网页、自动入库、Docker）
-- `gatus/`：Gatus 监控配置模板、Telegram 机器人脚本、systemd 单元
+- `gatus/`：Gatus 监控配置模板、Telegram 机器人脚本、systemd 单元。同一份 `status_bot.py` 用 `VPS_SITE` 区分大阪和杭州，杭州说明见 `docs/hangzhou-bot.md`
 - `caddy/`：大阪和杭州的 Caddy 配置模板
 - `openlist/`：OpenList / 115 的部署说明
 - `ssh/`：SSH 禁止密码登录的配置模板
-- `docs/`：对接说明和迁移恢复脚本
+- `docs/`：对接说明、迁移恢复脚本，以及杭州机器人部署说明（`docs/hangzhou-bot.md`）
 
 ## 不要提交的内容
 

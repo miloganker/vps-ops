@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Telegram 查询机器人：/status /server /services /traffic /backup /dl /auto /115qr /help，只回应指定 chat。"""
+"""Telegram 查询机器人：/status /server /services /traffic /backup /dl /auto /115qr /help，只回应指定 chat。
+
+VPS_SITE 未设置或 osaka：大阪现网行为（含 /traffic 与 sing-box 备份）。
+VPS_SITE=hangzhou：不检查 sing-box / traffic-collector，/traffic 不读流量库。
+"""
 import json, os, re, sys, time, shutil, subprocess, urllib.request, urllib.parse, urllib.error
 import socket, http.client
 from datetime import datetime, timezone, timedelta
@@ -40,7 +44,16 @@ CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
 API = f"https://api.telegram.org/bot{TOKEN}/"
 GATUS = "http://127.0.0.1:8080/api/v1/endpoints/statuses"
 TZ = timezone(timedelta(hours=8))
-SERVICES = ["sing-box", "caddy", "docker", "containerd", "ssh", "gatus-status-bot", "traffic-collector"]
+# 只有明确写成 hangzhou 才切换。未设置、osaka、以及任何别的值都保持大阪行为。
+VPS_SITE = (os.environ.get("VPS_SITE") or "osaka").strip().lower()
+if VPS_SITE not in ("osaka", "hangzhou"):
+    log(f"unknown VPS_SITE={VPS_SITE!r}, using osaka")
+    VPS_SITE = "osaka"
+IS_HANGZHOU = VPS_SITE == "hangzhou"
+if IS_HANGZHOU:
+    SERVICES = ["caddy", "docker", "containerd", "ssh", "gatus-status-bot"]
+else:
+    SERVICES = ["sing-box", "caddy", "docker", "containerd", "ssh", "gatus-status-bot", "traffic-collector"]
 CONTAINERS = ["gatus", "openlist", "mediahub"]
 
 def call(method, timeout=40, **params):
@@ -161,6 +174,8 @@ def categorize(dom):
     return OTHER
 
 def cmd_traffic(arg=""):
+    if IS_HANGZHOU:
+        return "这台杭州主机没有代理流量采集。/traffic 只在大阪的机器人上可用。"
     today = datetime.now(TZ).date()
     arg = (arg or "").strip().lower()
     if arg in ("", "today", "今天"):
@@ -213,6 +228,75 @@ BACKUP_LOCK = threading.Lock()
 TG_LIMIT = 50 * 1024 * 1024
 OPENLIST_DATA = "/opt/openlist/data"
 
+def backup_plain_paths():
+    """普通文件（不含 OpenList 的 sqlite 在线备份和 mediahub 目录遍历）。"""
+    plain = []
+    if not IS_HANGZHOU:
+        plain += [p for p in glob.glob("/etc/sing-box/*") if os.path.isfile(p)]
+    plain += [p for p in glob.glob("/etc/caddy/*") if os.path.isfile(p)]
+    plain += [p for p in ["/opt/gatus/config.yaml", "/opt/gatus/docker-compose.yml", "/opt/gatus/.env"] if os.path.isfile(p)]
+    plain += sorted(glob.glob("/opt/gatus/*.py"))
+    units = ["/etc/systemd/system/gatus-status-bot.service"]
+    if not IS_HANGZHOU:
+        units += ["/etc/systemd/system/traffic-collector.service", "/etc/systemd/system/sing-box.service"]
+    units.append("/root/.ssh/authorized_keys")
+    plain += [p for p in units if os.path.isfile(p)]
+    plain += [p for p in [f"{OPENLIST_DATA}/config.json"] if os.path.isfile(p)]
+    if not IS_HANGZHOU:
+        plain += [p for p in glob.glob("/etc/systemd/system/sing-box.service.d/*") if os.path.isfile(p)]
+    plain += [p for p in glob.glob("/etc/ssh/sshd_config.d/*.conf") if os.path.isfile(p)]
+    plain += [p for p in glob.glob("/etc/systemd/journald.conf.d/*.conf") if os.path.isfile(p)]
+    plain += [p for p in glob.glob("/opt/gatus/handoff/**/*", recursive=True) if os.path.isfile(p)]
+    return plain
+
+def backup_readme_lines(now, files, notes):
+    if IS_HANGZHOU:
+        readme = [
+            f"VPS 配置备份（杭州）  {now:%Y-%m-%d %H:%M} 北京时间  主机 {os.uname().nodename}",
+            "",
+            "这台机器没有 sing-box，也没有 traffic-collector。恢复的是 OpenList、Caddy、mediahub、Gatus 和这个 Telegram 机器人。",
+            "",
+            "内容（路径与服务器上的原路径一致）：",
+            *[f"  {f}" for f in sorted(files)],
+            "",
+            "恢复提示：",
+            "  1. apt 安装 caddy、docker.io、docker-compose、python3、7zip。不要安装或启用 sing-box、traffic-collector。",
+            "  2. 把 etc/、opt/、root/ 下的文件复制回 / 对应位置（.env 权限 600，authorized_keys 600）。",
+            "  3. OpenList：数据目录 /opt/openlist/data 归属 1001:1001（chown -R 1001:1001），然后按 openlist-inspect.json 重建，原来大致是：",
+            "     docker run -d --name openlist --restart unless-stopped -p 127.0.0.1:5244:5244 -v /opt/openlist/data:/opt/openlist/data openlistteam/openlist:latest",
+            "     （以 inspect 里的 Config.Env / HostConfig 为准）。Hub 慢时可用 docker.1ms.run 拉取后再打回该标签。",
+            "  4. Gatus：/opt/gatus/config.yaml 用杭州模板（检查 127.0.0.1 上的 OpenList 和 mediahub，不要换成大阪的 duckdns / sing-box 项）。cd /opt/gatus && docker compose up -d（监控历史 data/ 未备份，会重新开始）。",
+            "  4b. mediahub：opt/mediahub 复制回 /opt/mediahub（.env 权限 600，data/ 归属 10001:10001），cd /opt/mediahub && docker compose up -d --build。",
+            "  5. systemctl daemon-reload && systemctl enable --now caddy gatus-status-bot。",
+            "     /opt/gatus/.env 必须有 VPS_SITE=hangzhou，以及 TELEGRAM_TOKEN、TELEGRAM_CHAT_ID、WEBDAV_BASIC、BACKUP_PASSWORD。不要 enable sing-box 或 traffic-collector。",
+            "  - SSH 只允许密钥登录（etc/ssh/sshd_config.d/）和日志上限（etc/systemd/journald.conf.d/）：复制回去后 systemctl reload ssh、systemctl restart systemd-journald。",
+            "  6. Caddy 的配置和证书在 etc/caddy/（证书只在这台服务器和本加密包里，不要放进 Git）。对外是自签证书；监控走 127.0.0.1，不依赖公网 HTTPS。",
+            "  未备份：Gatus 历史数据库、OpenList 日志/临时目录（都可重新生成）。杭州没有代理流量数据库。",
+        ]
+    else:
+        readme = [
+            f"VPS 配置备份  {now:%Y-%m-%d %H:%M} 北京时间  主机 {os.uname().nodename}",
+            "",
+            "内容（路径与服务器上的原路径一致）：",
+            *[f"  {f}" for f in sorted(files)],
+            "",
+            "恢复提示：",
+            "  1. apt 安装 sing-box、caddy、docker.io、docker-compose、python3、7zip。",
+            "  2. 把 etc/、opt/、root/ 下的文件复制回 / 对应位置（注意 .env 和 sing-box 配置权限 600，authorized_keys 600）。",
+            "  3. OpenList：数据目录 /opt/openlist/data 归属 1001:1001（chown -R 1001:1001），然后按 openlist-inspect.json 重建，原来大致是：",
+            "     docker run -d --name openlist --restart unless-stopped -p 127.0.0.1:5244:5244 -v /opt/openlist/data:/opt/openlist/data openlistteam/openlist:latest",
+            "     （以 inspect 里的 Config.Env / HostConfig 为准）。",
+            "  4. Gatus：cd /opt/gatus && docker-compose up -d（监控历史 data/ 未备份，会重新开始）。",
+            "  4b. mediahub：opt/mediahub 复制回 /opt/mediahub（.env 权限 600，data/ 归属 10001:10001），cd /opt/mediahub && docker compose up -d --build。",
+            "  5. systemctl daemon-reload && systemctl enable --now sing-box caddy gatus-status-bot traffic-collector。",
+            "  - SSH 只允许密钥登录（etc/ssh/sshd_config.d/）和日志上限（etc/systemd/journald.conf.d/）：复制回去后 systemctl reload ssh、systemctl restart systemd-journald。",
+            "  6. sing-box 用的是软件包自带的 systemd 单元（/usr/lib/systemd/system/sing-box.service），装包即有，未单独备份。",
+            "  未备份：Gatus 历史数据库、流量统计数据库、OpenList 日志/临时目录（都可重新生成）。",
+        ]
+    if notes:
+        readme += ["", "备注：", *[f"  {n}" for n in notes]]
+    return readme
+
 def _copy(src, dst_root, rel):
     dst = os.path.join(dst_root, rel)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -229,19 +313,8 @@ def build_backup():
     os.chmod(tmp, 0o700)
     stage = os.path.join(tmp, "vps-backup")
     files, notes = [], []
-    # 1) 普通文件
-    plain = [p for p in glob.glob("/etc/sing-box/*") if os.path.isfile(p)]
-    plain += [p for p in glob.glob("/etc/caddy/*") if os.path.isfile(p)]
-    plain += [p for p in ["/opt/gatus/config.yaml", "/opt/gatus/docker-compose.yml", "/opt/gatus/.env"] if os.path.isfile(p)]
-    plain += sorted(glob.glob("/opt/gatus/*.py"))
-    plain += [p for p in ["/etc/systemd/system/gatus-status-bot.service", "/etc/systemd/system/traffic-collector.service",
-                          "/etc/systemd/system/sing-box.service", "/root/.ssh/authorized_keys"] if os.path.isfile(p)]
-    plain += [p for p in [f"{OPENLIST_DATA}/config.json"] if os.path.isfile(p)]
-    plain += [p for p in glob.glob("/etc/systemd/system/sing-box.service.d/*") if os.path.isfile(p)]
-    plain += [p for p in glob.glob("/etc/ssh/sshd_config.d/*.conf") if os.path.isfile(p)]
-    plain += [p for p in glob.glob("/etc/systemd/journald.conf.d/*.conf") if os.path.isfile(p)]
-    # 对接说明书与迁移脚本
-    plain += [p for p in glob.glob("/opt/gatus/handoff/**/*", recursive=True) if os.path.isfile(p)]
+    # 1) 普通文件。杭州跳过 sing-box 与 traffic-collector，其余与大阪相同。
+    plain = backup_plain_paths()
     for p in plain:
         files.append(_copy(p, stage, p.lstrip("/")))
     # 2) OpenList 数据库：用 sqlite 在线备份 API 得到一致副本，失败则直接复制
@@ -279,26 +352,7 @@ def build_backup():
             p = os.path.join(root, fn)
             if os.path.isfile(p) and not os.path.islink(p): files.append(_copy(p, stage, p.lstrip("/")))
     # 4) README
-    readme = [
-        f"VPS 配置备份  {now:%Y-%m-%d %H:%M} 北京时间  主机 {os.uname().nodename}",
-        "",
-        "内容（路径与服务器上的原路径一致）：",
-        *[f"  {f}" for f in sorted(files)],
-        "",
-        "恢复提示：",
-        "  1. apt 安装 sing-box、caddy、docker.io、docker-compose、python3、7zip。",
-        "  2. 把 etc/、opt/、root/ 下的文件复制回 / 对应位置（注意 .env 和 sing-box 配置权限 600，authorized_keys 600）。",
-        "  3. OpenList：数据目录 /opt/openlist/data 归属 1001:1001（chown -R 1001:1001），然后按 openlist-inspect.json 重建，原来大致是：",
-        "     docker run -d --name openlist --restart unless-stopped -p 127.0.0.1:5244:5244 -v /opt/openlist/data:/opt/openlist/data openlistteam/openlist:latest",
-        "     （以 inspect 里的 Config.Env / HostConfig 为准）。",
-        "  4. Gatus：cd /opt/gatus && docker-compose up -d（监控历史 data/ 未备份，会重新开始）。",
-        "  4b. mediahub：opt/mediahub 复制回 /opt/mediahub（.env 权限 600，data/ 归属 10001:10001），cd /opt/mediahub && docker compose up -d --build。",
-        "  5. systemctl daemon-reload && systemctl enable --now sing-box caddy gatus-status-bot traffic-collector。",
-        "  - SSH 只允许密钥登录（etc/ssh/sshd_config.d/）和日志上限（etc/systemd/journald.conf.d/）：复制回去后 systemctl reload ssh、systemctl restart systemd-journald。",
-        "  6. sing-box 用的是软件包自带的 systemd 单元（/usr/lib/systemd/system/sing-box.service），装包即有，未单独备份。",
-        "  未备份：Gatus 历史数据库、流量统计数据库、OpenList 日志/临时目录（都可重新生成）。",
-    ]
-    if notes: readme += ["", "备注：", *[f"  {n}" for n in notes]]
+    readme = backup_readme_lines(now, files, notes)
     with open(os.path.join(stage, "README.txt"), "w") as f: f.write("\n".join(readme) + "\n")
     files.append("README.txt")
     out = os.path.join(tmp, f"vps-backup-{now:%Y%m%d-%H%M}.7z")
@@ -331,7 +385,8 @@ def do_backup():
         tmp, out, n, size, notes = build_backup()
         if size > TG_LIMIT:
             send(f"⚠️ 备份包 {fmt_bytes(size)}，超过 Telegram 机器人 50MB 上传上限，未发送（已删除）。"); return
-        cap = (f"🗄 VPS 配置备份 {os.path.basename(out)}\n大小 {fmt_bytes(size)}，共 {n} 个文件（含 README.txt）\n"
+        title = "杭州 VPS 配置备份" if IS_HANGZHOU else "VPS 配置备份"
+        cap = (f"🗄 {title} {os.path.basename(out)}\n大小 {fmt_bytes(size)}，共 {n} 个文件（含 README.txt）\n"
                "🔐 已用你设置的备份密码加密（AES-256，文件名也加密），打开时需要输入该密码。")
         if notes: cap += "\n备注：" + "；".join(notes)
         send_document(out, cap[:1000])
@@ -910,20 +965,24 @@ def cmd_115qr(arg=""):
         _QR_LOCK.release()
         raise
 
-HELP = "可用命令：\n/status 监控检测结果\n/server 服务器资源状态\n/services 服务和容器运行状态\n/traffic 今日代理流量（按类型+域名）\n    /traffic yesterday 昨天\n    /traffic 7 近 7 天\n/backup 打包加密配置备份并发给你\n/dl <链接> 投递磁力或 ed2k 到 115 云下载（一条消息可多条，最多 20 条）\n/auto 自动入库开关（/auto on 或 /auto off）\n/115qr 扫码刷新 115 登录（/115qr cancel 取消）\n/help 显示本帮助"
+_HELP_OSAKA = "可用命令：\n/status 监控检测结果\n/server 服务器资源状态\n/services 服务和容器运行状态\n/traffic 今日代理流量（按类型+域名）\n    /traffic yesterday 昨天\n    /traffic 7 近 7 天\n/backup 打包加密配置备份并发给你\n/dl <链接> 投递磁力或 ed2k 到 115 云下载（一条消息可多条，最多 20 条）\n/auto 自动入库开关（/auto on 或 /auto off）\n/115qr 扫码刷新 115 登录（/115qr cancel 取消）\n/help 显示本帮助"
+_HELP_HANGZHOU = "可用命令（杭州）：\n/status 监控检测结果\n/server 服务器资源状态\n/services 服务和容器运行状态\n/backup 打包加密配置备份并发给你\n/dl <链接> 投递磁力或 ed2k 到 115 云下载（一条消息可多条，最多 20 条）\n/auto 自动入库开关（/auto on 或 /auto off）\n/115qr 扫码刷新 115 登录（/115qr cancel 取消）\n/help 显示本帮助\n/traffic 不可用：这台杭州主机没有代理流量采集，该命令只在大阪机器人上可用"
+HELP = _HELP_HANGZHOU if IS_HANGZHOU else _HELP_OSAKA
 COMMANDS = {"/status": cmd_status, "/server": cmd_server, "/services": cmd_services, "/traffic": cmd_traffic}
+_MENU_TRAFFIC = {"command": "traffic", "description": "代理流量统计（可加 yesterday 或 7）"}
 MENU = [{"command": "status", "description": "监控检测结果"},
         {"command": "server", "description": "服务器资源状态"},
-        {"command": "services", "description": "服务和容器运行状态"},
-        {"command": "traffic", "description": "代理流量统计（可加 yesterday 或 7）"},
-        {"command": "backup", "description": "打包加密配置备份并发送"},
-        {"command": "dl", "description": "投递磁力或 ed2k（一条可多条，最多 20 条）"},
-        {"command": "auto", "description": "自动入库开关（on / off）"},
-        {"command": "115qr", "description": "扫码刷新 115 登录"},
-        {"command": "help", "description": "显示帮助"}]
+        {"command": "services", "description": "服务和容器运行状态"}]
+if not IS_HANGZHOU:
+    MENU.append(_MENU_TRAFFIC)
+MENU += [{"command": "backup", "description": "打包加密配置备份并发送"},
+         {"command": "dl", "description": "投递磁力或 ed2k（一条可多条，最多 20 条）"},
+         {"command": "auto", "description": "自动入库开关（on / off）"},
+         {"command": "115qr", "description": "扫码刷新 115 登录"},
+         {"command": "help", "description": "显示帮助"}]
 
 def main():
-    log("bot started")
+    log("bot started, site=hangzhou" if IS_HANGZHOU else "bot started")
     try:
         call("setMyCommands", timeout=15, commands=json.dumps(MENU, ensure_ascii=False))
     except Exception as e:

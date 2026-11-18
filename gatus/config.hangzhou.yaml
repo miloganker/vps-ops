@@ -1,0 +1,96 @@
+# 杭州 Gatus 模板。部署时复制为 /opt/gatus/config.yaml（compose 挂的是这个文件名）。
+# 只检查本机 127.0.0.1 上的 OpenList / 115 / mediahub，不要改成大阪的 duckdns 或 sing-box。
+# 令牌和 chat id 只从环境变量来，不要把真实值写进这个文件。
+
+web:
+  address: 127.0.0.1
+  port: 8080
+
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+alerting:
+  telegram:
+    token: "${TELEGRAM_TOKEN}"
+    id: "${TELEGRAM_CHAT_ID}"
+
+endpoints:
+  - name: OpenList 网站
+    group: OpenList
+    url: "http://127.0.0.1:5244/ping"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY] == pong"
+      - "[RESPONSE_TIME] < 3000"
+    alerts:
+      - type: telegram
+        failure-threshold: 3
+        success-threshold: 1
+        send-on-resolved: true
+
+  - name: WebDAV 认证与目录
+    group: OpenList
+    url: "http://127.0.0.1:5244/dav/"
+    method: PROPFIND
+    interval: 1h
+    headers:
+      Depth: "1"
+      Authorization: "Basic ${WEBDAV_BASIC}"
+    conditions:
+      - "[STATUS] == 207"
+    alerts:
+      - type: telegram
+        failure-threshold: 1
+        success-threshold: 1
+        send-on-resolved: true
+
+  - name: 115 网盘挂载
+    group: 115
+    url: "http://127.0.0.1:5244/dav/guangdong/"
+    method: PROPFIND
+    interval: 1h
+    headers:
+      Depth: "1"
+      Authorization: "Basic ${WEBDAV_BASIC}"
+    conditions:
+      - "[STATUS] == 207"
+    alerts:
+      - type: telegram
+        failure-threshold: 1
+        success-threshold: 1
+        send-on-resolved: true
+
+  # 占位路径。部署后改成 115 库里一个长期存在的视频文件，否则这项会失败并告警。
+  # 间隔拉长是为了少打 115。只取 1 个字节并忽略跳转，期望 OpenList 回 302。
+  - name: 115 Token（视频取链）
+    group: 115
+    url: "http://127.0.0.1:5244/dav/guangdong/EXAMPLE_DIR/example-episode.mp4"
+    method: GET
+    interval: 4h
+    client:
+      ignore-redirect: true
+      timeout: 20s
+    headers:
+      Range: "bytes=0-0"
+      Authorization: "Basic ${WEBDAV_BASIC}"
+    conditions:
+      - "[STATUS] == 302"
+    alerts:
+      - type: telegram
+        failure-threshold: 1
+        success-threshold: 1
+        send-on-resolved: true
+
+  - name: mediahub 健康检查
+    group: mediahub
+    url: "http://127.0.0.1:8095/healthz"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+    alerts:
+      - type: telegram
+        failure-threshold: 3
+        success-threshold: 1
+        send-on-resolved: true
