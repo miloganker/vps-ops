@@ -1,0 +1,13 @@
+[Unit]
+Description=sing-box per-domain traffic collector
+After=sing-box.service
+Wants=sing-box.service
+
+[Service]
+ExecStart=/usr/bin/python3 -u /opt/gatus/traffic_collector.py
+Restart=always
+RestartSec=15
+MemoryMax=40M
+
+[Install]
+WantedBy=multi-user.target

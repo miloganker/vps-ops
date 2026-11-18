@@ -1,0 +1,120 @@
+web:
+  address: 127.0.0.1
+  port: 8080
+
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+alerting:
+  telegram:
+    token: "${TELEGRAM_TOKEN}"
+    id: "${TELEGRAM_CHAT_ID}"
+
+endpoints:
+  - name: OpenList 网站
+    group: OpenList
+    url: "https://sumax.duckdns.org:8443/ping"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY] == pong"
+      - "[RESPONSE_TIME] < 3000"
+    alerts:
+      - type: telegram
+        failure-threshold: 3
+        success-threshold: 1
+        send-on-resolved: true
+
+  - name: WebDAV 认证与目录
+    group: OpenList
+    url: "https://sumax.duckdns.org:8443/dav/"
+    method: PROPFIND
+    interval: 1h
+    headers:
+      Depth: "1"
+      Authorization: "Basic ${WEBDAV_BASIC}"
+    conditions:
+      - "[STATUS] == 207"
+    alerts:
+      - type: telegram
+        failure-threshold: 1
+        success-threshold: 1
+        send-on-resolved: true
+
+  - name: 115 网盘挂载
+    group: 115
+    url: "https://sumax.duckdns.org:8443/dav/guangdong/"
+    method: PROPFIND
+    interval: 1h
+    headers:
+      Depth: "1"
+      Authorization: "Basic ${WEBDAV_BASIC}"
+    conditions:
+      - "[STATUS] == 207"
+    alerts:
+      - type: telegram
+        failure-threshold: 1
+        success-threshold: 1
+        send-on-resolved: true
+
+  - name: Caddy HTTPS 证书
+    group: Caddy
+    url: "https://sumax.duckdns.org:8443/ping"
+    interval: 1h
+    conditions:
+      - "[STATUS] == 200"
+      - "[CERTIFICATE_EXPIRATION] > 336h"
+    alerts:
+      - type: telegram
+        failure-threshold: 1
+        success-threshold: 1
+        send-on-resolved: true
+
+  - name: sing-box 443 端口
+    group: sing-box
+    url: "tcp://166.88.2.219:443"
+    interval: 1m
+    conditions:
+      - "[CONNECTED] == true"
+    alerts:
+      - type: telegram
+        failure-threshold: 3
+        success-threshold: 1
+        send-on-resolved: true
+
+  - name: DuckDNS 解析
+    group: DNS
+    url: "1.1.1.1"
+    interval: 10m
+    dns:
+      query-name: "sumax.duckdns.org"
+      query-type: "A"
+    conditions:
+      - "[DNS_RCODE] == NOERROR"
+      - "[BODY] == 166.88.2.219"
+    alerts:
+      - type: telegram
+        failure-threshold: 2
+        success-threshold: 1
+        send-on-resolved: true
+
+  - name: 115 Token（视频取链）
+    group: 115
+    url: "https://sumax.duckdns.org:8443/dav/guangdong/EXAMPLE_DIR/example-episode.mp4"
+    method: GET
+    interval: 4h
+    client:
+      ignore-redirect: true
+      timeout: 20s
+    headers:
+      Range: "bytes=0-0"
+      Authorization: "Basic ${WEBDAV_BASIC}"
+    conditions:
+      - "[STATUS] == 302"
+    alerts:
+      - type: telegram
+        failure-threshold: 1
+        success-threshold: 1
+        send-on-resolved: true
+

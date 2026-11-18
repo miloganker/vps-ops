@@ -1,0 +1,11 @@
+.env
+data/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+screenshots/
+# extra safety
+.env.*
+!.env.example
+*.session_secret

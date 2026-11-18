@@ -1,0 +1,16 @@
+services:
+  gatus:
+    image: twinproduction/gatus:latest
+    container_name: gatus
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - ./data:/data
+    mem_limit: 64m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

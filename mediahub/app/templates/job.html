@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>{{ {'scan':'扫描','auto':'自动入库'}.get(job.type, '执行') }}{% if job.title %} · {{ job.title }}{% endif %} · <span id="st">{{ {'running':'进行中','done':'完成','error':'出错'}[job.status] }}</span></h2>
+  <progress id="pg" value="{{ job.progress.done }}" max="{{ job.progress.total or 1 }}"></progress>
+  {% if job.status == 'running' and job.type in ('execute', 'auto') %}
+  <form method="post" action="/stop"><input type="hidden" name="csrf" value="{{ csrf }}"><button>停止（做完当前一步后停）</button></form>
+  {% endif %}
+  {% if job.status != 'running' and job.type == 'scan' %}<p><a class="btn primary" href="/preview">查看预览 →</a></p>{% endif %}
+  {% if job.error %}<p class="err">{{ job.error }}</p>{% endif %}
+</div>
+{% if job.result and job.type == 'auto' and job.result.skipped %}
+<div class="card"><h2>没有自动入库</h2>
+  {% for x in job.result.skipped %}<div class="warn small">{{ x }}</div>{% endfor %}
+  <p><a class="btn primary" href="/preview">去预览里确认 →</a></p></div>
+{% endif %}
+{% if job.result and job.type in ('execute', 'auto') and job.result["items"] %}
+<div class="card">
+  <h2>结果 · 115 请求 {{ job.result.requests_115 }} 次</h2>
+  {% for r in job.result["items"] %}
+  <div class="res {{ r.status }}">
+    <b>{{ STATUS_ZH.get(r.status, r.status) }}</b> {{ r.target }}
+    <div class="muted small">原：{{ r.folder_old }}</div>
+    {% for n in r.notes %}<div class="warn small">{{ n }}</div>{% endfor %}
+    {% for e in r.errors %}<div class="err small">{{ e }}</div>{% endfor %}
+    {% set to = r.ops|selectattr('result','equalto','timeout')|list %}
+    {% if to %}<div class="muted small">{{ to|length }} 次请求超时（未重试，已在最后核对）</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+<div class="card"><h3>日志</h3><pre id="log">{{ job.log[-40:]|join('\n') }}</pre></div>
+{% if job.status == 'running' %}
+<script>
+(function poll(){
+  fetch('/api/job/{{ job.id }}').then(r=>r.json()).then(j=>{
+    document.getElementById('log').textContent=j.log.join('\n');
+    var p=document.getElementById('pg'); p.max=j.progress.total||1; p.value=j.progress.done;
+    if(j.status==='running'){ setTimeout(poll,2000); } else { location.reload(); }
+  }).catch(()=>setTimeout(poll,5000));
+})();
+</script>
+{% endif %}
+{% endblock %}

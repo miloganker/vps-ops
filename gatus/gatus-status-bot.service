@@ -1,0 +1,13 @@
+[Unit]
+Description=Telegram /status bot for Gatus
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/gatus/status_bot.py
+Restart=always
+RestartSec=10
+MemoryMax=40M
+
+[Install]
+WantedBy=multi-user.target

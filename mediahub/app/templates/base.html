@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}影视整理{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="/">🎬 影视整理</a>
+  {% if request.session.get('ok') %}
+  <nav>
+    <a href="/preview">预览</a>
+    <form method="post" action="/logout" class="inline"><button class="link">退出</button></form>
+  </nav>
+  {% endif %}
+</header>
+<main>
+{% if busy and current %}
+<div class="banner">有任务正在运行：<a href="/job/{{ current.id }}">{{ '扫描' if current.type=='scan' else '执行' }} · 查看进度</a></div>
+{% endif %}
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

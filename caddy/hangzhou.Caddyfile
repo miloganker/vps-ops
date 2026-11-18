@@ -1,0 +1,14 @@
+# 杭州阿里云：用自签证书给裸 IP 提供 HTTPS。
+# 证书文件 /etc/caddy/ip.crt 和 /etc/caddy/ip.key 只放在服务器上，不要提交到 Git。
+# 443 = OpenList，8443 = mediahub。不要把大阪的 duckdns 域名指到这里。
+{
+        auto_https off
+}
+:443 {
+        tls /etc/caddy/ip.crt /etc/caddy/ip.key
+        reverse_proxy 127.0.0.1:5244
+}
+:8443 {
+        tls /etc/caddy/ip.crt /etc/caddy/ip.key
+        reverse_proxy 127.0.0.1:8095
+}

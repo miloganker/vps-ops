@@ -1,0 +1,25 @@
+{
+    auto_https disable_redirects
+    http_port 80
+    https_port 8443
+}
+
+https://sumax.duckdns.org:8443 {
+    tls {
+        issuer acme {
+            disable_tlsalpn_challenge
+        }
+    }
+
+    reverse_proxy 127.0.0.1:5244
+}
+
+https://media.sumax.duckdns.org:8443 {
+    tls {
+        issuer acme {
+            disable_tlsalpn_challenge
+        }
+    }
+
+    reverse_proxy 127.0.0.1:8095
+}
