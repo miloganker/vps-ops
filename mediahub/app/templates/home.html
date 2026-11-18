@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block body %}
+{% set dl_labels = {"needs_kind":"待确认类型","submitting":"正在提交","downloading":"下载中","already_exists":"已在队列，盯梢中","resolving":"已下完，自动分类中","organizing":"自动入库中","complete":"已完成","failed":"失败"} %}
+{% set kind_zh = {"movie":"电影","tv":"电视剧"} %}
+{% set org_zh = {"queued":"排队等待自动入库","running":"正在自动改名入库","done":"✅ 已自动入库","skipped":"⚠️ 没有自动入库","unverified":"❓ 已移动，待核实","failed":"❌ 自动入库失败","interrupted":"⚠️ 自动入库中断"} %}
+{% set auto_txt = "下完后满足安全条件会自动改名并移进片库，否则通知你确认" if auto_org.enabled else "完成后会扫描并通知你，不会自动入库" %}
+{% if dl_msg == "ok" %}<div class="banner">已提交云下载{% if dl_id %}（{{ dl_id }}）{% endif %}，{{ auto_txt }}。</div>
+{% elif dl_msg == "auto" %}<div class="banner">已提交云下载{% if dl_id %}（{{ dl_id }}）{% endif %}。链接名字看不出是电影还是电视剧，先下到“待整理/未分类”，下完按文件自动分类；实在判断不了才会问你。{{ auto_txt }}。</div>
+{% elif dl_msg == "needs_kind" %}<div class="banner warn-banner">还不能判断是电影还是电视剧，请在下面的任务里选一下再提交。</div>
+{% elif dl_msg == "empty" %}<p class="err">请粘贴磁力或 ed2k 链接。</p>
+{% elif dl_msg == "bad" %}<p class="err">没认出是磁力或 ed2k 链接。</p>
+{% elif dl_msg == "error" %}<p class="err">提交失败，请稍后再试。</p>
+{% elif dl_msg == "hidden" %}<div class="banner">已从首页隐藏（任务记录仍保留）。</div>
+{% elif dl_msg == "batch" %}<div class="banner{% if '失败' in dl_batch or '没有提交' in dl_batch or '选一下类型' in dl_batch %} warn-banner{% endif %}">{{ dl_batch }}{{ auto_txt }}。</div>
+{% endif %}
+<div class="card">
+  <h2>投递云下载</h2>
+  {% if auto_org.enabled %}
+  <p class="muted">把磁力或 ed2k 交给 115 云下载。下完自动分类、移到待整理、扫描；<strong>识别高置信、没有提示/冲突时自动改名并移进正式片库</strong>，否则通知你在预览里确认。</p>
+  {% else %}
+  <p class="muted">把磁力或 ed2k 交给 115 云下载，存进对应的待整理目录。下完后会自动扫描，但<strong>不会自动改名或入库</strong>，还是要你在预览里确认。</p>
+  {% endif %}
+  <form method="post" action="/download">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <textarea name="url" rows="5" placeholder="可以一次粘贴多条磁力或 ed2k 链接，每行一条也可以。&#10;magnet:?xt=urn:btih:…&#10;ed2k://…" required></textarea>
+    <div class="radios">
+      <label><input type="radio" name="kind" value="" checked> 自动判断</label>
+      <label><input type="radio" name="kind" value="movie"> 电影</label>
+      <label><input type="radio" name="kind" value="tv"> 电视剧</label>
+    </div>
+    <button class="primary">提交到 115 云下载</button>
+  </form>
+  <p class="muted small">一次最多处理 20 条；如果选了电影或电视剧，会应用到这一批全部链接。也可以发给 Telegram 的 @rokcket_bot（或用 /dl），一条消息同样最多 20 条。</p>
+</div>
+<div class="card">
+  <h2>自动入库：{{ "开" if auto_org.enabled else "关" }}</h2>
+  <p class="muted small">{% if auto_org.source == "env" %}来自配置 AUTO_ORGANIZE（默认开）{% else %}已在网页/机器人里手动设置（配置默认：{{ "开" if auto_org.env_default else "关" }}）{% endif %}
+  {% if auto_org.queued %} · 排队中 {{ auto_org.queued|length }} 个{% endif %}</p>
+  <form method="post" action="/auto-organize" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if auto_org.enabled %}<button name="enabled" value="off">关闭自动入库</button>
+    {% else %}<button class="primary" name="enabled" value="on">开启自动入库</button>{% endif %}
+  </form>
+</div>
+<div class="card">
+  <h2>下载任务</h2>
+  {% for j in dls %}
+  <div class="row">
+    <b>{{ j.display_name or j.id }}</b>
+    · {{ kind_zh.get(j.kind, ("下完按文件识别" if j.auto else "未分类")) }}
+    · {{ dl_labels.get(j.status, j.status) }}
+    {% if j.progress %} · {{ j.progress | int }}%{% endif %}
+    {% if j.auto and j.classify and j.classify.reason and (j.kind or j.status == "needs_kind") %}<div class="muted small">{{ j.classify.reason }}</div>{% endif %}
+    {% if j.moved_to %}<div class="muted small">已移到 {{ j.moved_to }}</div>{% endif %}
+    {% if j.organize %}<div class="small">{{ org_zh.get(j.organize.state, j.organize.state) }}
+      {% if j.organize.dest and j.organize.state in ("done","unverified","failed") %} → {{ j.organize.dest }}{% endif %}
+      {% if j.organize.exec_job %} · <a href="/job/{{ j.organize.exec_job }}">明细</a>{% endif %}
+      {% if j.organize.reasons %}<div class="muted small">{{ j.organize.reasons|join("；") }}</div>{% endif %}</div>{% endif %}
+    {% if j.error %}<div class="err small">{{ j.error }}</div>{% endif %}
+    {% if j.status == "needs_kind" %}
+    <form method="post" action="/download/{{ j.id }}/kind" class="inline kind-btns">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button name="kind" value="movie">电影</button>
+      <button name="kind" value="tv">电视剧</button>
+    </form>
+    {% endif %}
+    {% if j.status == "failed" or (j.status == "complete" and j.organize and j.organize.state in ("skipped","unverified","failed","interrupted")) %}
+    <form method="post" action="/download/{{ j.id }}/dismiss" class="inline kind-btns">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">隐藏</button>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}<p class="muted">没有需要处理的下载任务</p>{% endfor %}
+</div>
+<div class="card">
+  <h2>扫描待整理</h2>
+  <p class="muted">电影：{{ s.staging_movies }}<br>电视剧：{{ s.staging_tv }}</p>
+  <form method="post" action="/scan">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="primary" {% if busy %}disabled{% endif %}>扫描并生成预览</button>
+  </form>
+  <p class="muted small">扫描只读取目录（不改任何东西）：每个文件夹列一次，另外各列一次片库。</p>
+  {% if preview %}
+  <p>上次扫描：{{ preview["items"]|length }} 项，115 请求 {{ preview.requests_115 }} 次 · <a href="/preview">查看预览</a></p>
+  {% endif %}
+</div>
+<div class="card">
+  <h2>最近整理任务</h2>
+  {% for j in recent %}
+  <div class="row"><a href="/job/{{ j.id }}">{{ j.id }}</a> · {{ {'scan':'扫描','auto':'自动入库'}.get(j.type, '执行') }}{% if j.type == 'auto' and j.title %} · {{ j.title }}{% endif %} · {{ {'running':'进行中','done':'完成','error':'出错'}[j.status] }}
+    {% if j.type == 'auto' and j.result %}{% if j.result.skipped %} · 未自动入库{% else %}{% for r in j.result["items"] %} · {{ STATUS_ZH.get(r.status, r.status) }} {{ r.target }}{% endfor %}{% endif %}{% endif %}
+    {% if j.result and j.result.requests_115 is defined %} · 115 请求 {{ j.result.requests_115 }} 次{% endif %}</div>
+  {% else %}<p class="muted">还没有任务</p>{% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+data/
+**/.session_secret
+*.db
+*.pem
+*.key
+*.crt
+*.7z
+*.tgz
+backups/
+__pycache__/
+.venv/
+.pytest_cache/
